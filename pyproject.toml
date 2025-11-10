@@ -1,0 +1,14 @@
+[project]
+name = "tensor-compiler"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "islpy>=2025.2.5",
+]
+
+[dependency-groups]
+dev = [
+    "basedpyright>=1.33.0",
+]
