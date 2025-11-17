@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from enum import Enum, auto
 
-from tensor_ir import DimExpr, Tensor, ScalarExpr, Symbol, DimRange
+from tensor_ir import DimExpr, Tensor, ScalarExpr, Symbol, DimRange, ReduceOp
 
 
 class AccessType(Enum):
@@ -25,6 +25,14 @@ class Compute:
 
 
 @dataclass
+class Reduce:
+    name: str
+    write: TensorAccess
+    value: ScalarExpr
+    reducer: ReduceOp
+
+
+@dataclass
 class Loop:
     iter_var: Symbol
     domain: DimRange
@@ -38,7 +46,7 @@ class Block:
     stmts: list["Stmt"]
 
 
-Stmt = Compute | Loop | Block
+Stmt = Compute | Reduce | Loop | Block
 
 
 @dataclass

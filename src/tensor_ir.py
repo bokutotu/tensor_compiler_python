@@ -49,6 +49,12 @@ class Tensor:
     dtype: DType
 
 
+@dataclass(frozen=True)
+class IndexMap:
+    in_axes: tuple[Symbol, ...]
+    out: tuple[DimExpr, ...]
+
+
 class TensorExpr:
     pass
 
