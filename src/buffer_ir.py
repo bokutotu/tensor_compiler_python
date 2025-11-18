@@ -67,16 +67,8 @@ class MMA:
     participants: int
 
 
-@dataclass
-class Launch:
-    grid: tuple[int, int, int]
-    block: tuple[int, int, int]
-    body: Block
-
-
 BlockStmt = (
     Buffer
-    | Launch
     | Loop
     | Compute
     | Reduce
