@@ -1,4 +1,3 @@
-from loop_ir import AccessType, Block, Compute, Loop, TensorAccess
 from tensor_ir import (
     DType,
     DimExpr,
@@ -12,14 +11,14 @@ from tensor_ir import (
 )
 from tensor_to_loop import lower_tensor_to_loop
 from loop_to_buffer import lower_loop_to_buffer
-from buffer_ir import MemoryType
+from buffer_codegen import generate_code
 
 
 def _axis_index(symbol: Symbol) -> DimExpr:
     return DimExpr(base=0, terms={symbol: 1})
 
 
-def test_lower_loop_to_buffer_add_1d():
+def test_codegen():
     i = Symbol("i")
     domain = {i: DimRange(lower=DimExpr(base=0), upper=DimExpr(base=4))}
     shape = (DimExpr(base=4),)
@@ -44,33 +43,13 @@ def test_lower_loop_to_buffer_add_1d():
         expr=expr,
     )
 
-    # Tensor IR -> Loop IR
     loop_func = lower_tensor_to_loop([compute_def])
-
-    # Loop IR -> Buffer IR
     buffer = lower_loop_to_buffer(loop_func)
+    code = generate_code(buffer)
 
-    # Verify buffer properties
-    assert buffer.name == "C"
-    assert buffer.tensor == c
-    assert buffer.memory == MemoryType.GLOBAL
-
-    # Verify body structure
-    expected_compute = Compute(
-        name="C",
-        write=TensorAccess(
-            tensor=c,
-            indices=(_axis_index(i),),
-            access_type=AccessType.WRITE,
-        ),
-        expr=expr,
-    )
-
-    expected_loop = Loop(
-        iter_var=i,
-        domain=domain[i],
-        step=1,
-        body=[expected_compute],
-    )
-
-    assert buffer.body == Block(stmts=[expected_loop])
+    expected = """void C(float* C, float* A, float* B) {
+  for (int i = 0; i < 4; i += 1) {
+    C[i] = (A[i] + B[i]);
+  }
+}"""
+    assert code == expected
