@@ -3,6 +3,7 @@ from collections.abc import Sequence
 from tensor_ir import (
     DimExpr,
     Op,
+    Reduction,
     ScalarExpr,
     Symbol,
     Tensor,
@@ -10,7 +11,7 @@ from tensor_ir import (
     TensorInput,
     TensorExpr,
 )
-from loop_ir import AccessType, Block, Compute, Function, Loop, Stmt, TensorAccess
+from loop_ir import AccessType, Block, Compute, Function, Loop, Reduce, Stmt, TensorAccess
 
 
 def lower_tensor_to_loop(defs: Sequence[TensorComputeDef]) -> Function:
@@ -21,6 +22,13 @@ def lower_tensor_to_loop(defs: Sequence[TensorComputeDef]) -> Function:
 
     compute_def = defs[0]
 
+    if isinstance(compute_def.expr, Reduction):
+        return _lower_reduction(compute_def)
+    else:
+        return _lower_compute(compute_def)
+
+
+def _lower_compute(compute_def: TensorComputeDef) -> Function:
     compute = Compute(
         name=compute_def.name,
         write=TensorAccess(
@@ -54,6 +62,68 @@ def lower_tensor_to_loop(defs: Sequence[TensorComputeDef]) -> Function:
     )
 
 
+def _lower_reduction(compute_def: TensorComputeDef) -> Function:
+    reduction = compute_def.expr
+    assert isinstance(reduction, Reduction)
+
+    output_axes = compute_def.axes
+    reduction_axes = reduction.axes
+    output_indices = _indices_for_axes(output_axes)
+
+    init_compute = Compute(
+        name=f"{compute_def.name}_init",
+        write=TensorAccess(
+            tensor=compute_def.tensor,
+            indices=output_indices,
+            access_type=AccessType.WRITE,
+        ),
+        expr=reduction.init,
+    )
+
+    reduce_stmt = Reduce(
+        name=compute_def.name,
+        write=TensorAccess(
+            tensor=compute_def.tensor,
+            indices=output_indices,
+            access_type=AccessType.WRITE,
+        ),
+        value=_extract_scalar_expr(reduction.body),
+        reducer=reduction.reducer,
+    )
+
+    reduction_body: list[Stmt] = [reduce_stmt]
+    for axis in reversed(reduction_axes):
+        domain = reduction.domain[axis]
+        reduction_body = [Loop(iter_var=axis, domain=domain, step=1, body=reduction_body)]
+
+    output_body: list[Stmt] = [init_compute] + reduction_body
+    for axis in reversed(output_axes):
+        domain = compute_def.domain[axis]
+        output_body = [Loop(iter_var=axis, domain=domain, step=1, body=output_body)]
+
+    symbol_bounds: dict[Symbol, tuple[int, int | None]] = {}
+    for axis in output_axes:
+        domain = compute_def.domain[axis]
+        symbol_bounds[axis] = (
+            _dim_expr_to_int(domain.lower),
+            _dim_expr_to_int(domain.upper),
+        )
+    for axis in reduction_axes:
+        domain = reduction.domain[axis]
+        symbol_bounds[axis] = (
+            _dim_expr_to_int(domain.lower),
+            _dim_expr_to_int(domain.upper),
+        )
+
+    return Function(
+        name=compute_def.name,
+        inputs=_collect_inputs(reduction.body, compute_def.tensor),
+        outputs=[compute_def.tensor],
+        body=Block(stmts=output_body),
+        symbol_bounds=symbol_bounds,
+    )
+
+
 def _collect_inputs(expr: TensorExpr, output_tensor: Tensor) -> list[Tensor]:
     tensors: list[Tensor] = []
     seen_ids: set[int] = set()
@@ -68,6 +138,8 @@ def _collect_inputs(expr: TensorExpr, output_tensor: Tensor) -> list[Tensor]:
         elif isinstance(node, Op):
             for operand in node.operands:
                 visit(operand)
+        elif isinstance(node, Reduction):
+            visit(node.body)
 
     visit(expr)
     return tensors
@@ -84,6 +156,6 @@ def _dim_expr_to_int(expr: DimExpr) -> int:
 
 
 def _extract_scalar_expr(expr: TensorExpr) -> ScalarExpr:
-    if isinstance(expr, Op):
+    if isinstance(expr, ScalarExpr):
         return expr
-    raise NotImplementedError("Only direct scalar expressions are supported.")
+    raise NotImplementedError(f"Cannot extract scalar expression from {type(expr).__name__}.")

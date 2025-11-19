@@ -1,6 +1,6 @@
 from buffer_ir import Buffer
-from loop_ir import Block, Compute, Loop, TensorAccess, Stmt
-from tensor_ir import DimExpr, DType, Op, OpKind, ScalarExpr, Tensor, TensorInput
+from loop_ir import Block, Compute, Loop, Reduce, TensorAccess, Stmt
+from tensor_ir import DimExpr, DType, Op, OpKind, ReduceOp, ScalarConst, ScalarExpr, Tensor, TensorInput
 
 
 def generate_code(buffer: Buffer) -> str:
@@ -32,6 +32,19 @@ def _gen_stmt(stmt: Stmt, indent: int) -> str:
         lhs = _gen_access(stmt.write)
         rhs = _gen_expr(stmt.expr)
         return f"{ind}{lhs} = {rhs};"
+    elif isinstance(stmt, Reduce):
+        lhs = _gen_access(stmt.write)
+        rhs = _gen_expr(stmt.value)
+        if stmt.reducer == ReduceOp.SUM:
+            return f"{ind}{lhs} += {rhs};"
+        elif stmt.reducer == ReduceOp.PROD:
+            return f"{ind}{lhs} *= {rhs};"
+        elif stmt.reducer == ReduceOp.MAX:
+            return f"{ind}if ({rhs} > {lhs}) {lhs} = {rhs};"
+        elif stmt.reducer == ReduceOp.MIN:
+            return f"{ind}if ({rhs} < {lhs}) {lhs} = {rhs};"
+        else:
+            raise NotImplementedError(f"Reducer {stmt.reducer} not supported")
     raise NotImplementedError(type(stmt))
 
 
@@ -44,12 +57,29 @@ def _gen_expr(expr: ScalarExpr) -> str:
     if isinstance(expr, Op):
         l = _gen_expr(expr.operands[0])
         r = _gen_expr(expr.operands[1])
-        op = {OpKind.ADD: "+", OpKind.MUL: "*"}[expr.kind]
+        op = {OpKind.ADD: "+", OpKind.MUL: "*", OpKind.SUB: "-", OpKind.DIV: "/"}[expr.kind]
         return f"({l} {op} {r})"
     elif isinstance(expr, TensorInput):
         idx = _gen_index(expr.tensor, expr.indices)
         return f"{expr.tensor.name}[{idx}]"
+    elif isinstance(expr, ScalarConst):
+        return _gen_const(expr)
     raise NotImplementedError(type(expr))
+
+
+def _gen_const(const: ScalarConst) -> str:
+    if const.dtype == DType.FLOAT32:
+        if const.value == float('inf'):
+            return "INFINITY"
+        elif const.value == float('-inf'):
+            return "-INFINITY"
+        else:
+            s = str(const.value)
+            return s if '.' in s else f"{s}.0"
+    elif const.dtype == DType.INT64:
+        return str(int(const.value))
+    else:
+        raise NotImplementedError(f"Const type {const.dtype} not supported")
 
 
 def _gen_dim(expr: DimExpr) -> str:
@@ -62,6 +92,10 @@ def _gen_dim(expr: DimExpr) -> str:
 
 
 def _gen_index(tensor: Tensor, indices: tuple[DimExpr, ...]) -> str:
+    # Scalar tensor (0-dimensional)
+    if len(indices) == 0:
+        return "0"
+
     if len(indices) == 1:
         return _gen_dim(indices[0])
 
@@ -95,6 +129,9 @@ def _collect_tensors(block: Block) -> list[Tensor]:
         elif isinstance(stmt, Compute):
             tensors[stmt.write.tensor.name] = stmt.write.tensor
             _visit_expr(stmt.expr)
+        elif isinstance(stmt, Reduce):
+            tensors[stmt.write.tensor.name] = stmt.write.tensor
+            _visit_expr(stmt.value)
     def _visit_expr(expr: ScalarExpr) -> None:
         if isinstance(expr, TensorInput):
             tensors[expr.tensor.name] = expr.tensor
