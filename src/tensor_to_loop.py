@@ -10,19 +10,16 @@ from tensor_ir import (
     TensorInput,
     TensorExpr,
 )
-from loop_ir import AccessType, Block, Compute, Function, Loop, TensorAccess
+from loop_ir import AccessType, Block, Compute, Function, Loop, Stmt, TensorAccess
 
 
 def lower_tensor_to_loop(defs: Sequence[TensorComputeDef]) -> Function:
     if not defs:
         raise ValueError("At least one tensor compute def is required.")
+    if len(defs) > 1:
+        raise NotImplementedError("Multiple compute definitions are not supported yet.")
 
     compute_def = defs[0]
-    if len(compute_def.axes) != 1:
-        raise NotImplementedError("Only single-axis computations are supported.")
-
-    axis = compute_def.axes[0]
-    domain = compute_def.domain[axis]
 
     compute = Compute(
         name=compute_def.name,
@@ -35,16 +32,25 @@ def lower_tensor_to_loop(defs: Sequence[TensorComputeDef]) -> Function:
         attrs=dict(compute_def.attrs),
     )
 
-    loop = Loop(iter_var=axis, domain=domain, step=1, body=[compute])
+    body: list[Stmt] = [compute]
+    for axis in reversed(compute_def.axes):
+        domain = compute_def.domain[axis]
+        body = [Loop(iter_var=axis, domain=domain, step=1, body=body)]
+
+    symbol_bounds: dict[Symbol, tuple[int, int | None]] = {}
+    for axis in compute_def.axes:
+        domain = compute_def.domain[axis]
+        symbol_bounds[axis] = (
+            _dim_expr_to_int(domain.lower),
+            _dim_expr_to_int(domain.upper),
+        )
 
     return Function(
         name=compute_def.name,
         inputs=_collect_inputs(compute_def.expr, compute_def.tensor),
         outputs=[compute_def.tensor],
-        body=Block(stmts=[loop]),
-        symbol_bounds={
-            axis: (_dim_expr_to_int(domain.lower), _dim_expr_to_int(domain.upper))
-        },
+        body=Block(stmts=body),
+        symbol_bounds=symbol_bounds,
     )
 
 

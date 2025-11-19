@@ -74,3 +74,71 @@ def test_lower_loop_to_buffer_add_1d():
     )
 
     assert buffer.body == Block(stmts=[expected_loop])
+
+
+def test_lower_loop_to_buffer_add_2d():
+    i = Symbol("i")
+    j = Symbol("j")
+    domain = {
+        i: DimRange(lower=DimExpr(base=0), upper=DimExpr(base=2)),
+        j: DimRange(lower=DimExpr(base=0), upper=DimExpr(base=3)),
+    }
+    shape = (DimExpr(base=2), DimExpr(base=3))
+
+    a = Tensor(name="A", shape=shape, dtype=DType.FLOAT32)
+    b = Tensor(name="B", shape=shape, dtype=DType.FLOAT32)
+    c = Tensor(name="C", shape=shape, dtype=DType.FLOAT32)
+
+    expr = Op(
+        kind=OpKind.ADD,
+        operands=(
+            TensorInput(tensor=a, indices=(_axis_index(i), _axis_index(j))),
+            TensorInput(tensor=b, indices=(_axis_index(i), _axis_index(j))),
+        ),
+    )
+
+    compute_def = TensorComputeDef(
+        name="C",
+        tensor=c,
+        axes=(i, j),
+        domain=domain,
+        expr=expr,
+    )
+
+    # Tensor IR -> Loop IR
+    loop_func = lower_tensor_to_loop([compute_def])
+
+    # Loop IR -> Buffer IR
+    buffer = lower_loop_to_buffer(loop_func)
+
+    # Verify buffer properties
+    assert buffer.name == "C"
+    assert buffer.tensor == c
+    assert buffer.memory == MemoryType.GLOBAL
+
+    # Verify body structure
+    expected_compute = Compute(
+        name="C",
+        write=TensorAccess(
+            tensor=c,
+            indices=(_axis_index(i), _axis_index(j)),
+            access_type=AccessType.WRITE,
+        ),
+        expr=expr,
+    )
+
+    expected_inner_loop = Loop(
+        iter_var=j,
+        domain=domain[j],
+        step=1,
+        body=[expected_compute],
+    )
+
+    expected_outer_loop = Loop(
+        iter_var=i,
+        domain=domain[i],
+        step=1,
+        body=[expected_inner_loop],
+    )
+
+    assert buffer.body == Block(stmts=[expected_outer_loop])
