@@ -6,7 +6,6 @@ from tensor_ir import DimExpr, DType, Op, OpKind, ReduceOp, ScalarConst, ScalarE
 def generate_code(buffer: Buffer) -> str:
     tensors = _collect_tensors(buffer.body)
 
-    # Verify all tensors are FLOAT32
     for t in tensors:
         if t.dtype != DType.FLOAT32:
             raise NotImplementedError(f"Only FLOAT32 is supported, got {t.dtype} for tensor {t.name}")
@@ -92,21 +91,17 @@ def _gen_dim(expr: DimExpr) -> str:
 
 
 def _gen_index(tensor: Tensor, indices: tuple[DimExpr, ...]) -> str:
-    # Scalar tensor (0-dimensional)
     if len(indices) == 0:
         return "0"
 
     if len(indices) == 1:
         return _gen_dim(indices[0])
 
-    # Multi-dimensional: compute strides and flatten
     parts: list[str] = []
     for i, idx in enumerate(indices):
         if i == len(indices) - 1:
-            # Last dimension: no stride multiplication
             parts.append(_gen_dim(idx))
         else:
-            # Compute stride: product of remaining dimensions
             stride = 1
             for j in range(i + 1, len(tensor.shape)):
                 shape_dim = tensor.shape[j]

@@ -6,7 +6,10 @@ from tensor_ir import (
     OpKind,
     ReduceOp,
     Reduction,
+    Scan,
     ScalarConst,
+    StateRead,
+    StateVar,
     Symbol,
     Tensor,
     TensorComputeDef,
@@ -398,6 +401,51 @@ def test_codegen_gemm():
         C[(i * 3) + j] += (A[(i * 5) + k] * B[(k * 3) + j]);
       }
     }
+  }
+}"""
+    assert code == expected
+
+
+def test_codegen_scan_sum_to_scalar():
+    i = Symbol("i")
+    scan_domain = {i: DimRange(lower=DimExpr(base=0), upper=DimExpr(base=4))}
+
+    a = Tensor(name="A", shape=(DimExpr(base=4),), dtype=DType.FLOAT32)
+    c = Tensor(name="C", shape=(), dtype=DType.FLOAT32)
+
+    scan = Scan(
+        axis=i,
+        domain=scan_domain,
+        state_vars=(StateVar(name="s", dtype=DType.FLOAT32),),
+        init=(ScalarConst(value=0.0, dtype=DType.FLOAT32),),
+        step=(
+            Op(
+                kind=OpKind.ADD,
+                operands=(
+                    StateRead(index=0),
+                    TensorInput(tensor=a, indices=(_axis_index(i),)),
+                ),
+            ),
+        ),
+        output_index=0,
+    )
+
+    compute_def = TensorComputeDef(
+        name="C",
+        tensor=c,
+        axes=(),
+        domain={},
+        expr=scan,
+    )
+
+    loop_func = lower_tensor_to_loop([compute_def])
+    buffer = lower_loop_to_buffer(loop_func)
+    code = generate_code(buffer)
+
+    expected = """void C(float* C, float* A) {
+  C[0] = 0.0;
+  for (int i = 0; i < 4; i += 1) {
+    C[0] = (C[0] + A[i]);
   }
 }"""
     assert code == expected
