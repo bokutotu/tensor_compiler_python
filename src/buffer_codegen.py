@@ -1,39 +1,56 @@
+from collections.abc import Mapping
+
 from buffer_ir import Buffer
 from loop_ir import Block, Compute, Loop, Reduce, TensorAccess, Stmt
 from tensor_ir import DimExpr, DType, Op, OpKind, ReduceOp, ScalarConst, ScalarExpr, Tensor, TensorInput
 
 
-def generate_code(buffer: Buffer) -> str:
+def generate_code(buffer: Buffer, *, use_restrict: bool = False, assume_alignment: int | None = None) -> str:
     tensors = _collect_tensors(buffer.body)
 
     for t in tensors:
         if t.dtype != DType.FLOAT32:
             raise NotImplementedError(f"Only FLOAT32 is supported, got {t.dtype} for tensor {t.name}")
 
-    params = ", ".join(f"float* {t.name}" for t in tensors)
-    body = _gen_block(buffer.body, 1)
+    restrict_kw = " __restrict" if use_restrict else ""
+    params = ", ".join(f"float*{restrict_kw} {t.name}" for t in tensors)
+
+    ptr_aliases: dict[str, str] = {}
+    alias_lines: list[str] = []
+    if assume_alignment is not None:
+        for t in tensors:
+            alias = f"{t.name}_aligned"
+            ptr_aliases[t.name] = alias
+            alias_lines.append(
+                f"  float* {alias} = (float*)__builtin_assume_aligned({t.name}, {assume_alignment});"
+            )
+
+    body_lines: list[str] = []
+    body_lines.extend(alias_lines)
+    body_lines.append(_gen_block(buffer.body, 1, ptr_aliases))
+    body = "\n".join(body_lines)
     return f"void {buffer.name}({params}) {{\n{body}\n}}"
 
 
-def _gen_block(block: Block, indent: int) -> str:
-    return "\n".join(_gen_stmt(s, indent) for s in block.stmts)
+def _gen_block(block: Block, indent: int, ptr_aliases: Mapping[str, str]) -> str:
+    return "\n".join(_gen_stmt(s, indent, ptr_aliases) for s in block.stmts)
 
 
-def _gen_stmt(stmt: Stmt, indent: int) -> str:
+def _gen_stmt(stmt: Stmt, indent: int, ptr_aliases: Mapping[str, str]) -> str:
     ind = "  " * indent
     if isinstance(stmt, Loop):
         var = stmt.iter_var.name
         lo = _gen_dim(stmt.domain.lower)
         hi = _gen_dim(stmt.domain.upper)
-        body = "\n".join(_gen_stmt(s, indent + 1) for s in stmt.body)
+        body = "\n".join(_gen_stmt(s, indent + 1, ptr_aliases) for s in stmt.body)
         return f"{ind}for (int {var} = {lo}; {var} < {hi}; {var} += {stmt.step}) {{\n{body}\n{ind}}}"
     elif isinstance(stmt, Compute):
-        lhs = _gen_access(stmt.write)
-        rhs = _gen_expr(stmt.expr)
+        lhs = _gen_access(stmt.write, ptr_aliases)
+        rhs = _gen_expr(stmt.expr, ptr_aliases)
         return f"{ind}{lhs} = {rhs};"
     elif isinstance(stmt, Reduce):
-        lhs = _gen_access(stmt.write)
-        rhs = _gen_expr(stmt.value)
+        lhs = _gen_access(stmt.write, ptr_aliases)
+        rhs = _gen_expr(stmt.value, ptr_aliases)
         if stmt.reducer == ReduceOp.SUM:
             return f"{ind}{lhs} += {rhs};"
         elif stmt.reducer == ReduceOp.PROD:
@@ -47,20 +64,22 @@ def _gen_stmt(stmt: Stmt, indent: int) -> str:
     raise NotImplementedError(type(stmt))
 
 
-def _gen_access(access: TensorAccess) -> str:
+def _gen_access(access: TensorAccess, ptr_aliases: Mapping[str, str]) -> str:
+    tensor_name = ptr_aliases.get(access.tensor.name, access.tensor.name)
     idx = _gen_index(access.tensor, access.indices)
-    return f"{access.tensor.name}[{idx}]"
+    return f"{tensor_name}[{idx}]"
 
 
-def _gen_expr(expr: ScalarExpr) -> str:
+def _gen_expr(expr: ScalarExpr, ptr_aliases: Mapping[str, str]) -> str:
     if isinstance(expr, Op):
-        l = _gen_expr(expr.operands[0])
-        r = _gen_expr(expr.operands[1])
+        l = _gen_expr(expr.operands[0], ptr_aliases)
+        r = _gen_expr(expr.operands[1], ptr_aliases)
         op = {OpKind.ADD: "+", OpKind.MUL: "*", OpKind.SUB: "-", OpKind.DIV: "/"}[expr.kind]
         return f"({l} {op} {r})"
     elif isinstance(expr, TensorInput):
         idx = _gen_index(expr.tensor, expr.indices)
-        return f"{expr.tensor.name}[{idx}]"
+        tensor_name = ptr_aliases.get(expr.tensor.name, expr.tensor.name)
+        return f"{tensor_name}[{idx}]"
     elif isinstance(expr, ScalarConst):
         return _gen_const(expr)
     raise NotImplementedError(type(expr))

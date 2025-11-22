@@ -24,6 +24,46 @@ def _axis_index(symbol: Symbol) -> DimExpr:
     return DimExpr(base=0, terms={symbol: 1})
 
 
+def test_codegen_with_restrict_and_alignment():
+    i = Symbol("i")
+    domain = {i: DimRange(lower=DimExpr(base=0), upper=DimExpr(base=4))}
+    shape = (DimExpr(base=4),)
+
+    a = Tensor(name="A", shape=shape, dtype=DType.FLOAT32)
+    b = Tensor(name="B", shape=shape, dtype=DType.FLOAT32)
+    c = Tensor(name="C", shape=shape, dtype=DType.FLOAT32)
+
+    expr = Op(
+        kind=OpKind.ADD,
+        operands=(
+            TensorInput(tensor=a, indices=(_axis_index(i),)),
+            TensorInput(tensor=b, indices=(_axis_index(i),)),
+        ),
+    )
+
+    compute_def = TensorComputeDef(
+        name="C",
+        tensor=c,
+        axes=(i,),
+        domain=domain,
+        expr=expr,
+    )
+
+    loop_func = lower_tensor_to_loop([compute_def])
+    buffer = lower_loop_to_buffer(loop_func)
+    code = generate_code(buffer, use_restrict=True, assume_alignment=128)
+
+    expected = """void C(float* __restrict C, float* __restrict A, float* __restrict B) {
+  float* C_aligned = (float*)__builtin_assume_aligned(C, 128);
+  float* A_aligned = (float*)__builtin_assume_aligned(A, 128);
+  float* B_aligned = (float*)__builtin_assume_aligned(B, 128);
+  for (int i = 0; i < 4; i += 1) {
+    C_aligned[i] = (A_aligned[i] + B_aligned[i]);
+  }
+}"""
+    assert code == expected
+
+
 def test_codegen():
     i = Symbol("i")
     domain = {i: DimRange(lower=DimExpr(base=0), upper=DimExpr(base=4))}
