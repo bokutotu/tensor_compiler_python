@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum, auto
 
 from tensor_ir import DimExpr, Tensor, ScalarExpr, Symbol, DimRange, ReduceOp
@@ -21,7 +21,6 @@ class Compute:
     name: str
     write: TensorAccess
     expr: ScalarExpr
-    attrs: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass
@@ -38,7 +37,6 @@ class Loop:
     domain: DimRange
     step: int
     body: list["Stmt"]
-    attrs: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass

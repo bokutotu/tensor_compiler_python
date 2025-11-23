@@ -42,7 +42,6 @@ def _lower_compute(compute_def: TensorComputeDef) -> Function:
             access_type=AccessType.WRITE,
         ),
         expr=_extract_scalar_expr(compute_def.expr),
-        attrs=dict(compute_def.attrs),
     )
 
     body: list[Stmt] = [compute]

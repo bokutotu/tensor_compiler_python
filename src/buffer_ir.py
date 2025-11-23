@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum, auto
 
 from loop_ir import Block, Compute, Loop, Reduce, TensorAccess
@@ -18,7 +18,6 @@ class Buffer:
     memory: MemoryType
     body: Block
     layout: IndexMap | None = None
-    attrs: dict[str, object] = field(default_factory=dict)
 
 
 class Scope(Enum):

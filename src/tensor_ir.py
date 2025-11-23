@@ -119,4 +119,3 @@ class TensorComputeDef:
     axes: tuple[Symbol, ...]
     domain: Mapping[Symbol, DimRange]
     expr: TensorExpr
-    attrs: dict[str, object] = field(default_factory=dict)
