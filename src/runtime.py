@@ -13,7 +13,7 @@ import numpy as np
 
 from buffer_codegen import generate_code
 from buffer_ir import Buffer
-from loop_ir import Block, Compute, Loop, Reduce, Stmt
+from loop_ir import Block, Compute, If, Loop, Reduce, Stmt
 from tensor_ir import Op, ScalarExpr, Tensor, TensorInput
 
 
@@ -228,6 +228,12 @@ def _collect_tensors(block: Block) -> list[Tensor]:
         elif isinstance(stmt, Reduce):
             tensors[stmt.write.tensor.name] = stmt.write.tensor
             _visit_expr(stmt.value)
+        elif isinstance(stmt, If):
+            for s in stmt.then_body.stmts:
+                visit(s)
+            if stmt.else_body is not None:
+                for s in stmt.else_body.stmts:
+                    visit(s)
 
     def _visit_expr(expr: ScalarExpr) -> None:
         if isinstance(expr, TensorInput):

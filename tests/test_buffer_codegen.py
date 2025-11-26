@@ -1,3 +1,16 @@
+from buffer_codegen import generate_code
+from buffer_ir import Buffer, MemoryType
+from loop_ir import (
+    AccessType,
+    Block,
+    Compare,
+    CompareOp,
+    Compute,
+    If,
+    Loop,
+    TensorAccess,
+)
+from loop_to_buffer import lower_loop_to_buffer
 from tensor_ir import (
     DType,
     DimExpr,
@@ -16,12 +29,13 @@ from tensor_ir import (
     TensorInput,
 )
 from tensor_to_loop import lower_tensor_to_loop
-from loop_to_buffer import lower_loop_to_buffer
-from buffer_codegen import generate_code
 
 
 def _axis_index(symbol: Symbol) -> DimExpr:
     return DimExpr(base=0, terms={symbol: 1})
+
+def _dim_val(val: int) -> DimExpr:
+    return DimExpr(base=val)
 
 
 def test_codegen_with_restrict_and_alignment():
@@ -217,6 +231,47 @@ def test_codegen_reduction_1d_to_scalar():
   C[0] = 0.0;
   for (int i = 0; i < 4; i += 1) {
     C[0] += A[i];
+  }
+}"""
+    assert code == expected
+
+
+def test_codegen_if_guard():
+    i = Symbol("i")
+    domain = {i: DimRange(lower=_dim_val(0), upper=_dim_val(4))}
+    shape = (DimExpr(base=4),)
+
+    a = Tensor(name="A", shape=shape, dtype=DType.FLOAT32)
+    b = Tensor(name="B", shape=shape, dtype=DType.FLOAT32)
+    c = Tensor(name="C", shape=shape, dtype=DType.FLOAT32)
+
+    then_compute = Compute(
+        name="C_then",
+        write=TensorAccess(tensor=c, indices=(_axis_index(i),), access_type=AccessType.WRITE),
+        expr=TensorInput(tensor=a, indices=(_axis_index(i),)),
+    )
+    else_compute = Compute(
+        name="C_else",
+        write=TensorAccess(tensor=c, indices=(_axis_index(i),), access_type=AccessType.WRITE),
+        expr=TensorInput(tensor=b, indices=(_axis_index(i),)),
+    )
+
+    guard = Compare(lhs=_axis_index(i), rhs=_dim_val(3), op=CompareOp.LT)
+    if_stmt = If(cond=guard, then_body=Block([then_compute]), else_body=Block([else_compute]))
+
+    loop = Loop(iter_var=i, domain=domain[i], step=1, body=[if_stmt])
+    block = Block(stmts=[loop])
+    buffer = Buffer(name="C", tensor=c, memory=MemoryType.GLOBAL, body=block)
+
+    code = generate_code(buffer)
+
+    expected = """void C(float* C, float* A, float* B) {
+  for (int i = 0; i < 4; i += 1) {
+    if (i < 3) {
+      C[i] = A[i];
+    } else {
+      C[i] = B[i];
+    }
   }
 }"""
     assert code == expected

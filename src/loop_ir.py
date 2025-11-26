@@ -4,6 +4,20 @@ from enum import Enum, auto
 from tensor_ir import DimExpr, Tensor, ScalarExpr, Symbol, DimRange, ReduceOp
 
 
+class CompareOp(Enum):
+    LT = auto()
+    LE = auto()
+    GT = auto()
+    GE = auto()
+
+
+@dataclass(frozen=True)
+class Compare:
+    lhs: DimExpr
+    rhs: DimExpr
+    op: CompareOp
+
+
 class AccessType(Enum):
     READ = auto()
     WRITE = auto()
@@ -40,11 +54,18 @@ class Loop:
 
 
 @dataclass
+class If:
+    cond: Compare
+    then_body: "Block"
+    else_body: "Block | None" = None
+
+
+@dataclass
 class Block:
     stmts: list["Stmt"]
 
 
-Stmt = Compute | Reduce | Loop | Block
+Stmt = Compute | Reduce | Loop | Block | If
 
 
 @dataclass

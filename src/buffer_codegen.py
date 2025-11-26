@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 
 from buffer_ir import Buffer
-from loop_ir import Block, Compute, Loop, Reduce, TensorAccess, Stmt
+from loop_ir import Block, Compute, If, Loop, Reduce, TensorAccess, Stmt, Compare, CompareOp
 from tensor_ir import DimExpr, DType, Op, OpKind, ReduceOp, ScalarConst, ScalarExpr, Tensor, TensorInput
 
 
@@ -61,7 +61,24 @@ def _gen_stmt(stmt: Stmt, indent: int, ptr_aliases: Mapping[str, str]) -> str:
             return f"{ind}if ({rhs} < {lhs}) {lhs} = {rhs};"
         else:
             raise NotImplementedError(f"Reducer {stmt.reducer} not supported")
+    elif isinstance(stmt, If):
+        cond = _gen_compare(stmt.cond)
+        then_body = _gen_block(stmt.then_body, indent + 1, ptr_aliases)
+        if stmt.else_body is None:
+            return f"{ind}if ({cond}) {{\n{then_body}\n{ind}}}"
+        else_body = _gen_block(stmt.else_body, indent + 1, ptr_aliases)
+        return f"{ind}if ({cond}) {{\n{then_body}\n{ind}}} else {{\n{else_body}\n{ind}}}"
     raise NotImplementedError(type(stmt))
+
+
+def _gen_compare(cmp: Compare) -> str:
+    op = {
+        CompareOp.LT: "<",
+        CompareOp.LE: "<=",
+        CompareOp.GT: ">",
+        CompareOp.GE: ">=",
+    }[cmp.op]
+    return f"{_gen_dim(cmp.lhs)} {op} {_gen_dim(cmp.rhs)}"
 
 
 def _gen_access(access: TensorAccess, ptr_aliases: Mapping[str, str]) -> str:
@@ -101,12 +118,19 @@ def _gen_const(const: ScalarConst) -> str:
 
 
 def _gen_dim(expr: DimExpr) -> str:
-    if expr.base and expr.terms:
-        raise NotImplementedError("base + terms")
-    if expr.terms:
-        sym, coeff = next(iter(expr.terms.items()))
-        return sym.name if coeff == 1 else f"{coeff} * {sym.name}"
-    return str(expr.base)
+    parts: list[str] = []
+    if expr.base != 0 or not expr.terms:
+        parts.append(str(expr.base))
+
+    for sym, coeff in expr.terms.items():
+        if coeff == 1:
+            parts.append(sym.name)
+        elif coeff == -1:
+            parts.append(f"-{sym.name}")
+        else:
+            parts.append(f"{coeff} * {sym.name}")
+
+    return " + ".join(parts) if parts else "0"
 
 
 def _gen_index(tensor: Tensor, indices: tuple[DimExpr, ...]) -> str:
@@ -146,6 +170,12 @@ def _collect_tensors(block: Block) -> list[Tensor]:
         elif isinstance(stmt, Reduce):
             tensors[stmt.write.tensor.name] = stmt.write.tensor
             _visit_expr(stmt.value)
+        elif isinstance(stmt, If):
+            for s in stmt.then_body.stmts:
+                visit(s)
+            if stmt.else_body is not None:
+                for s in stmt.else_body.stmts:
+                    visit(s)
     def _visit_expr(expr: ScalarExpr) -> None:
         if isinstance(expr, TensorInput):
             tensors[expr.tensor.name] = expr.tensor
